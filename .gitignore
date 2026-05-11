@@ -1,0 +1,27 @@
+node_modules/
+dist/
+.env
+*.js.map
+*.d.ts
+!src/**/*.d.ts
+
+# Internal architecture doc (README covers this)
+ARCHITECTURE.md
+
+# Squad AI team state (not for source control)
+.squad/
+
+# Azure deployment config (local only)
+.azure/
+
+# Built artifacts
+deploy.zip
+webapp-logs*.zip
+appPackage/M365CEAProxy.zip
+appPackage/.build-temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.mp4
+webapp-logs/

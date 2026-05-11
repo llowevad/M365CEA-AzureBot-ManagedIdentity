@@ -1,0 +1,45 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.21/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.21",
+  "id": "${{BOT_APP_ID}}",
+  "version": "1.0.0",
+  "name": {
+    "short": "M365 CEA Proxy",
+    "full": "M365 Custom Engine Agent - A2A Proxy"
+  },
+  "description": {
+    "short": "Thin proxy agent to A2A orchestrator",
+    "full": "A Microsoft 365 Custom Engine Agent that acts as a thin proxy, relaying messages from Teams and M365 Copilot to an existing A2A (Agent-to-Agent) orchestrator endpoint. No business logic lives here — all intelligence is in the orchestrator. Uses User-Assigned Managed Identity for zero-secret authentication."
+  },
+  "developer": {
+    "name": "Dave Wollerman",
+    "websiteUrl": "https://github.com/dwollerman",
+    "privacyUrl": "https://privacy.microsoft.com/privacystatement",
+    "termsOfUseUrl": "https://www.microsoft.com/servicesagreement"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#4F6BED",
+  "bots": [
+    {
+      "botId": "${{BOT_APP_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "commandLists": [],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "copilotAgents": {
+    "customEngineAgents": [
+      {
+        "type": "bot",
+        "id": "${{BOT_APP_ID}}"
+      }
+    ]
+  },
+  "validDomains": [
+    "${{APP_SERVICE_NAME}}.azurewebsites.net"
+  ]
+}
