@@ -15,13 +15,53 @@ This bot relays conversational messages via JSON-RPC 2.0 protocol, delegating al
 1. **User sends a message** in Teams or M365 Copilot
 2. **Azure Bot Service** validates the inbound JWT token (audience = UAI Client ID) and forwards the Activity
 3. **App Service** (M365 Agents SDK) receives the Activity, extracts the text message
-4. **A2A Client** sends a JSON-RPC 2.0 `message/send` request to the orchestrator (no auth required)
-5. **Orchestrator** processes and returns the response
-6. **Bot replies** back through the same channel
+4. **Topic detection** determines if the message is a greeting/small talk or a real topic:
+   - **Greeting detected** → Returns a welcome message with an example prompt (no A2A call)
+   - **Topic detected** → Sends acknowledgment via streaming with topic summary, then proceeds to step 5
+5. **Streaming progress updates** begin immediately (5-second rotation through friendly status messages)
+6. **A2A Client** sends a JSON-RPC 2.0 `message/send` request to the orchestrator (no auth required)
+7. **Orchestrator** processes and returns the response
+8. **Final response delivered** through the same streaming connection (no separate message)
+9. **Error handling** also flows through the stream if anything fails
 
 ### Managed Identity Flow
 
 ![Managed Identity Flow](docs/managed-identity.png)
+
+## Bot Behavior
+
+### Streaming Progress Updates
+
+While the A2A orchestrator is processing, the bot sends real-time progress updates every 5 seconds using the M365 Agents SDK's `StreamingResponse` class with `queueInformativeUpdate()`. These progress messages rotate through friendly status updates to keep the user informed that work is in progress:
+
+- ⏳ Working on your request...
+- 🔄 Still processing — this might take a moment...
+- 🧠 The orchestrator is thinking...
+- 📝 Almost there...
+- ⚙️ Crunching the details...
+- 🔍 Gathering information...
+
+All progress updates and the final response appear in a single conversation bubble.
+
+### Topic Detection & Greeting Handling
+
+The bot uses regex matching and message length heuristics to distinguish between greetings/small talk and actual topics:
+
+- **Greeting detected** (e.g., "hi", "hello", "hey", "thanks", "great"): Returns a welcome message with an example prompt, such as `"Write a blog post about AI in healthcare"`. No A2A call is made.
+- **Topic detected**: Acknowledges immediately with `"📝 Got it — working on: {topic}"` via streaming, then sends the message to the A2A orchestrator for processing.
+
+### Final Response Delivery
+
+The final response from the A2A orchestrator is delivered via `queueTextChunk(response)` + `endStream()`, ensuring the response appears in the same streaming bubble as the progress updates. This provides a cohesive, single-message experience rather than fragmenting the response across multiple bubbles.
+
+### Error Handling via Stream
+
+If an error occurs during orchestration (timeout, authentication failure, service unavailability, or generic error), the error message is delivered through the stream using `queueTextChunk(errorMessage)` + `endStream()`. Users see context-specific error messages:
+
+- ⏳ **Timeout**: "I'm taking longer than expected to respond. Please try again in a moment."
+- 🔒 **Auth Error**: "Authentication error — please contact your administrator."
+- ⚠️ **Service Unavailable**: "I'm having trouble reaching my backend service. Please try again shortly."
+- ❌ **Generic Error**: "Something went wrong. Please try again. If the issue persists, contact your administrator."
 
 ## Prerequisites
 
@@ -191,7 +231,7 @@ The script:
 
 - **Separation of concerns:** Bot framework integration stays separate from AI/orchestration logic
 - **Flexibility:** Swap upstream orchestrators without redeploying bot infrastructure
-- **Simplicity:** This bot has ~200 lines of code; complexity lives in the orchestrator
+- **Simplicity:** This bot has ~130 lines of code; complexity lives in the orchestrator
 - **Testability:** Mock A2A endpoints for isolated bot testing
 
 ### SDK Authentication Configuration
