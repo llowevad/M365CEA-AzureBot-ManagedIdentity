@@ -1,7 +1,7 @@
 /**
  * A2A Client — forwards messages to the orchestrator endpoint.
  * No authentication required for outbound calls to the orchestrator.
- * Consumes SSE stream, aggregates full response (v1).
+ * Supports both aggregated (sendMessage) and streaming (streamMessage) consumption.
  */
 
 import { AppConfig } from './config';
@@ -43,23 +43,78 @@ export class A2AClient {
     throw lastError;
   }
 
+  /**
+   * Streams a user message to the A2A orchestrator, calling onChunk for each text part as it arrives.
+   */
+  async streamMessage(
+    userMessage: string,
+    onChunk: (text: string) => void,
+    conversationId?: string
+  ): Promise<void> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          await this.delay(RETRY_DELAY_MS * attempt);
+        }
+        return await this.executeStreamingRequest(userMessage, onChunk, conversationId);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(`A2A streaming request attempt ${attempt + 1} failed:`, lastError.message);
+
+        if (lastError.message.includes('Client error')) {
+          break;
+        }
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async executeStreamingRequest(
+    userMessage: string,
+    onChunk: (text: string) => void,
+    conversationId?: string
+  ): Promise<void> {
+    const url = `${this.config.a2aBaseUrl}${this.config.a2aPath}`;
+
+    const body = this.buildRequestBody(userMessage, conversationId);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const category = response.status >= 400 && response.status < 500 ? 'Client error' : 'Server error';
+        throw new Error(`${category} ${response.status}: ${response.statusText}`);
+      }
+
+      await this.consumeSSEStreamWithCallback(response, onChunk);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('A2A request timed out after 30 seconds');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async executeRequest(userMessage: string, conversationId?: string): Promise<string> {
     const url = `${this.config.a2aBaseUrl}${this.config.a2aPath}`;
 
-    const body = {
-      jsonrpc: '2.0',
-      id: crypto.randomUUID(),
-      method: 'message/send',
-      params: {
-        message: {
-          kind: 'message',
-          messageId: crypto.randomUUID(),
-          role: 'user',
-          parts: [{ kind: 'text', text: userMessage }],
-          ...(conversationId && { contextId: conversationId }),
-        },
-      },
-    };
+    const body = this.buildRequestBody(userMessage, conversationId);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -181,6 +236,84 @@ export class A2AClient {
       throw new Error(`A2A error ${json.error.code}: ${json.error.message}`);
     }
     throw new Error('Unexpected A2A response format');
+  }
+
+  private buildRequestBody(userMessage: string, conversationId?: string) {
+    return {
+      jsonrpc: '2.0',
+      id: crypto.randomUUID(),
+      method: 'message/send',
+      params: {
+        message: {
+          kind: 'message',
+          messageId: crypto.randomUUID(),
+          role: 'user',
+          parts: [{ kind: 'text', text: userMessage }],
+          ...(conversationId && { contextId: conversationId }),
+        },
+      },
+    };
+  }
+
+  /**
+   * Consumes an SSE stream, calling onChunk for each text part as it arrives.
+   * Falls back to JSON body parsing if response is not SSE.
+   */
+  private async consumeSSEStreamWithCallback(
+    response: Response,
+    onChunk: (text: string) => void
+  ): Promise<void> {
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const json = await response.json() as A2AJsonResponse;
+      onChunk(this.extractTextFromJsonResponse(json));
+      return;
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body available');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let receivedAny = false;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') continue;
+
+            try {
+              const event = JSON.parse(data) as A2ASSEEvent;
+              const text = this.extractTextFromEvent(event);
+              if (text) {
+                onChunk(text);
+                receivedAny = true;
+              }
+            } catch {
+              // Skip malformed SSE data lines
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!receivedAny) {
+      throw new Error('No text content received from A2A endpoint');
+    }
   }
 
   private delay(ms: number): Promise<void> {

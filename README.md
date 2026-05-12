@@ -52,7 +52,9 @@ The bot uses regex matching and message length heuristics to distinguish between
 
 ### Final Response Delivery
 
-The final response from the A2A orchestrator is delivered via `queueTextChunk(response)` + `endStream()`, ensuring the response appears in the same streaming bubble as the progress updates. This provides a cohesive, single-message experience rather than fragmenting the response across multiple bubbles.
+The final response from the A2A orchestrator is delivered as a **true streaming proxy** — SSE chunks from the orchestrator are piped directly into `queueTextChunk()` as they arrive, rather than being aggregated into a single string first. This provides progressive rendering and eliminates visual blink artifacts during the stream transition. The inter-activity delay is also reduced from 1000ms to 250ms via `setDelayInMs()`.
+
+> 📄 **[Streaming Proxy Update — Blink Mitigation](docs/streaming-proxy-update.md)** — detailed write-up of the problem, root cause analysis, and implementation changes.
 
 ### Error Handling via Stream
 

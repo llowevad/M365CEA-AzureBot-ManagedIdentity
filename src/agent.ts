@@ -55,6 +55,7 @@ export function createAgent(config: AppConfig): AgentApplication<TurnState> {
 
     // Use the SDK's StreamingResponse for in-place progress updates
     const streamer = new StreamingResponse(context);
+    streamer.setDelayInMs(250);
 
     // First informative update: the topic acknowledgment
     streamer.queueInformativeUpdate(`📝 Got it — working on: ${topicSummary}`);
@@ -72,13 +73,13 @@ export function createAgent(config: AppConfig): AgentApplication<TurnState> {
 
     try {
       const conversationId = context.activity.conversation?.id;
-      const response = await a2aClient.sendMessage(userMessage, conversationId);
+      await a2aClient.streamMessage(userMessage, (chunk) => {
+        streamer.queueTextChunk(chunk);
+      }, conversationId);
 
       // Stop progress updates
       clearInterval(progressTimer);
 
-      // Send the final A2A response as the stream content, then close the stream
-      streamer.queueTextChunk(response);
       await streamer.endStream();
     } catch (error) {
       const errorMessage = categorizeError(error);
